@@ -4,15 +4,25 @@ if (!require(rsconnect)){
 }
 library('rsconnect')
 
+if (!require(devtools)){
+  install.packages('devtools')
+}
+library(devtools)
+
 if (!require(shiny)){
   install.packages('shiny')
+  library(shiny)
 }
-library(shiny)
 
-if (!require(tidyverse)){
-  install.packages('tidyverse')
+if (!require(shinybusy)){
+  install.packages('shinybusy')
 }
-library(tidyverse)
+library(shinybusy)
+
+if (!require(shinyWidgets)){
+  install.packages('shinyWidgets')
+}
+library(shinyWidgets)
 
 if (!require(DT)){
   install.packages('DT')
@@ -44,6 +54,11 @@ if (!require(jsonlite)){
 }
 library(jsonlite)
 
+if (!require(tidyverse)){
+  install.packages('tidyverse')
+}
+library(tidyverse)
+
 ### Import and Clean Data ###
 
 # Steps to pull files from repo
@@ -65,13 +80,6 @@ ga_salary_data_url = df %>%
   filter(name == "2022_MLS_GoalsAdded_and_Salary_Data.xlsx") %>%
   select('download_url') %>%
   pull()
-
-# Steps to pull files from the Data folder in the repo
-# path = "Data/MLS_Player_Season_Stats"
-# url = paste0("https://api.github.com/repos/", owner, "/", repo, "/contents/", path, "?ref=main")
-# response = GET(url)
-# data = content(response, "text")
-# df = fromJSON(data)
 
 temp_file = tempfile()
 download.file(ga_salary_data_url, temp_file, mode = "wb")
@@ -160,34 +168,51 @@ shinyApp(
   # UI function
   ui = fluidPage(
     
+    # changing the color of the background
+    tags$head(tags$style(
+      HTML('
+         #sidebarPanel {
+            background-color: #582C8350;
+         }
+        
+         #title {
+          color: #380F55;
+         }')
+    )),
+    
     # Title
-    titlePanel("Player Optimization App"),
+    titlePanel("", windowTitle = "Player Optimization App"),
+    
+    h2(id = "title", "Player Optimization App"),
     
     # Set the input fields
     sidebarLayout(
-      sidebarPanel(
-        h4("Select the number of players at each position:"),
-        
-        # Numeric inputs for minimum and maximum players per position
-        uiOutput("position_inputs"),
-        
-        numericInput(inputId = "max_salary", 
-                     label = "What is the salary limit?", 
-                     value = 1000000,
-                     min = 0),
-        actionButton(inputId = "btn_run", 
-                     label = "Run")
-      ),
-      mainPanel()
+      sidebarPanel(id = "sidebarPanel",
+                   h4("Select the number of players at each position:"), 
+                   
+                   # Numeric inputs for minimum and maximum players per position 
+                   uiOutput("position_inputs"), 
+                   
+                   currencyInput(inputId = "max_salary", 
+                                 label = "What is the salary limit?", 
+                                 format = "dollar", 
+                                 value = 1000000, 
+                                 # max = 
+                                 align = "center"), 
+                   
+                   actionButton(inputId = "btn_run", 
+                                label = "Run"), 
+                   width = 6
+      ), 
+      
+      mainPanel( 
+        fluidRow( 
+          column(6, uiOutput("max_salary_input")),
+          column(12, dataTableOutput('table'))
+          )
+        )
+      )
     ),
-    
-    # display section for the max salary field and the results
-    fluidRow(
-      column(12, tableOutput('test_table')), # used for testing
-      column(6, uiOutput("max_salary_input")),
-      column(12, dataTableOutput('table'))
-    ),
-  ),
   
   # Server function 
   server = function(input, output, session) {
@@ -217,7 +242,7 @@ shinyApp(
     
     # formatting the max_salary input field
     output$max_salary_input = renderUI({
-      tags$style(type = "text/css", "#max_salary { width: 125px; }"
+      tags$style(type = "text/css", "#max_salary { width: 145px; }"
       )
     })
     
@@ -243,139 +268,169 @@ shinyApp(
                                      unlist(numeric_input_position_values)) %>%
         filter(input_value > 0)
       
-      # turn the position_values dataframe into a table() format
-      positions_required = position_values %>% 
-        spread(position, input_value, fill = 0)
-      
-      # setting the population equal to the number of players entered
-      sel_pop = sum(position_values$input_value)
-      
-      # setting the max salary equal to the input value
-      max_salary = max_salary()
-      
-      # filter the Player_Data dataframe on the players in the selected positions
-      Filtered_Player_Data = 
-        Player_Data %>%
-        filter(Position %in% position_values$position) %>%
-        select(c('Player',
-                 'Position',
-                 'Guaranteed_Compensation',
-                 'Log_Goals_Added'))
-      
-      ### GA Functions
-      ### Initialize population
-      initializePopulation = function(k){
+      # check if there are 2 or more positions selected
+      if(nrow(position_values) == 0 | sum(position_values$input_value) == 1)
+      {
+        # display warning if there are less than 2 positions selected
+        report_warning("Select more players", 
+                       "There must be 2 or more total players selected", 
+                       button = "Ok",
+                       config_report(
+                         svgColor = "#582C83",
+                         buttonBackground = "#582C83",
+                         backOverlayColor = "#582C8390"
+                       ))
+      }else
+      {
+        # add modal spinner while data is loading
+        show_modal_spinner(
+          spin = 'semipolar',
+          color = '#582C83',
+          text = 'Please wait'
+        ) 
         
-        function(GA){
-          mat = matrix(0, ncol = GA@nBits, nrow = GA@popSize)
+        # turn the position_values dataframe into a table() format
+        positions_required = position_values %>% 
+          spread(position, input_value, fill = 0)
+        
+        # setting the population equal to the number of players entered
+        sel_pop = sum(position_values$input_value)
+        
+        # setting the max salary equal to the input value
+        max_salary = max_salary()
+        
+        # filter the Player_Data dataframe on the players in the selected positions
+        Filtered_Player_Data = 
+          Player_Data %>%
+          filter(Position %in% position_values$position) %>%
+          select(c('Player',
+                   'Position',
+                   'Guaranteed_Compensation',
+                   'Log_Goals_Added'))
+        
+        ### GA Functions
+        ### Initialize population
+        initializePopulation = function(k){
           
-          for(i in seq_len(GA@popSize))
-            mat[i, sample(GA@nBits, k)] = 1
+          function(GA){
+            mat = matrix(0, ncol = GA@nBits, nrow = GA@popSize)
+            
+            for(i in seq_len(GA@popSize))
+              mat[i, sample(GA@nBits, k)] = 1
+            
+            for (i in 1:length(position_values$input_value)) {
+              if (position_values$input_value[i] > 0) {
+                ind = which(Filtered_Player_Data$Position 
+                            == names(position_values$input_value)[i])
+                mat[, ind[sample(length(ind), 1)]] = 1
+              }
+            }
+            
+            mat
+          }
+        }
+        
+        ### Crossover function
+          # custom function that performs crossover while keeping the number of 
+          # selected bits equal to the selected population
+        crossoverFunction = function(GA, parents){
           
-          for (i in 1:length(position_values$input_value)) {
-            if (position_values$input_value[i] > 0) {
-              ind = which(Filtered_Player_Data$Position 
-                          == names(position_values$input_value)[i])
-              mat[, ind[sample(length(ind), 1)]] = 1
+          parents = GA@population[parents,] %>%
+            apply(1, function(x) which(x == 1)) %>%
+            t()
+          
+          parents_diff = list("vector", 2)
+          parents_diff[[1]] = setdiff(parents[2,], parents[1,])
+          parents_diff[[2]] = setdiff(parents[1,], parents[2,])
+          
+          children_ind = list("vector", 2)
+          for(i in 1:2){
+            k = length(parents_diff[[i]])
+            change_k = sample(k, sample(ceiling(k/2), 1))
+            children_ind[[i]] = if(length(change_k) > 0){
+              c(parents[i, -change_k], parents_diff[[i]][change_k])
+            } else {
+              parents[i,]
             }
           }
           
-          mat
+          children = matrix(0, nrow = 2, ncol = GA@nBits)
+          for(i in 1:2)
+            children[i, children_ind[[i]]] = 1
+          
+          list(children = children, fitness = c(NA, NA))
         }
-      }
-      
-      ### Crossover function
-        # custom function that performs crossover while keeping the number of 
-        # selected bits equal to the selected population
-      crossoverFunction = function(GA, parents){
         
-        parents = GA@population[parents,] %>%
-          apply(1, function(x) which(x == 1)) %>%
-          t()
+        ### Mutation function
+          # custom function that performs mutation while keeping the number of 
+          # selected bits equal to the selected population
+        mutationFunction = function(GA, parent){
+          ind = which(GA@population[parent,] == 1)
+          n_change = sample(sel_pop, 1)
+          ind[sample(length(ind), n_change)] = 
+            sample(setdiff(seq_len(GA@nBits), ind), n_change)
+          parent = integer(GA@nBits)
+          parent[ind] = 1
+          
+          parent
+        }
         
-        parents_diff = list("vector", 2)
-        parents_diff[[1]] = setdiff(parents[2,], parents[1,])
-        parents_diff[[2]] = setdiff(parents[1,], parents[2,])
-        
-        children_ind = list("vector", 2)
-        for(i in 1:2){
-          k = length(parents_diff[[i]])
-          change_k = sample(k, sample(ceiling(k/2), 1))
-          children_ind[[i]] = if(length(change_k) > 0){
-            c(parents[i, -change_k], parents_diff[[i]][change_k])
-          } else {
-            parents[i,]
+        ### Fitness function
+        # objective function that sums the goals_added value and checks the
+        # constraint of number of players and their positions
+        fitness = function(x)
+        {
+          current_goals_added=x%*%Filtered_Player_Data$Log_Goals_Added
+          current_salary=x%*%Filtered_Player_Data$Guaranteed_Compensation
+          positions = Filtered_Player_Data$Position[x == 1] # positions of selected players
+          positions_count = table(positions) # count of players in each position
+          
+          if(current_salary>max_salary) {
+            return(0) # Penalty for exceeding the max salary
+          }
+          else if (all(positions_count == positions_required)) {
+            return(current_goals_added) # meets the players and positions constraint
+          }
+          else {
+            return(0)
           }
         }
         
-        children = matrix(0, nrow = 2, ncol = GA@nBits)
-        for(i in 1:2)
-          children[i, children_ind[[i]]] = 1
+        # Genetic algorithm function
+        GA = ga(
+          type = "binary",
+          fitness = fitness,
+          nBits = nrow(Filtered_Player_Data),
+          population = initializePopulation(sel_pop),
+          crossover = crossoverFunction,
+          mutation = mutationFunction,
+          run = 125,
+          pmutation = .25,
+          maxiter = 300,
+          popSize = 30,
+          monitor = FALSE
+        )
         
-        list(children = children, fitness = c(NA, NA))
-      }
-      
-      ### Mutation function
-        # custom function that performs mutation while keeping the number of 
-        # selected bits equal to the selected population
-      mutationFunction = function(GA, parent){
-        ind = which(GA@population[parent,] == 1)
-        n_change = sample(sel_pop, 1)
-        ind[sample(length(ind), n_change)] = 
-          sample(setdiff(seq_len(GA@nBits), ind), n_change)
-        parent = integer(GA@nBits)
-        parent[ind] = 1
+        #
+        Renamed_Player_Data = Filtered_Player_Data %>%
+          select(c('Player',
+                   'Position',
+                   'Log_Goals_Added',
+                   'Guaranteed_Compensation')) %>%
+          rename('Goals Added' = 'Log_Goals_Added',
+                 'Total Salary' = 'Guaranteed_Compensation')
+  
+        # displaying the algorithm's results on the UI
+        output$table = renderDataTable(Renamed_Player_Data[GA@solution == 1,],
+                                       options = list(
+                                         searching = FALSE,
+                                         lengthChange = FALSE,
+                                         dom = "lfrt"
+                                       ))
         
-        parent
+        # removing the modal
+        remove_modal_spinner() # remove it when done
       }
-      
-      ### Fitness function
-      # objective function that sums the goals_added value and checks the
-      # constraint of number of players and their positions
-      fitness = function(x)
-      {
-        current_goals_added=x%*%Filtered_Player_Data$Log_Goals_Added
-        current_salary=x%*%Filtered_Player_Data$Guaranteed_Compensation
-        positions = Filtered_Player_Data$Position[x == 1] # positions of selected players
-        positions_count = table(positions) # count of players in each position
-        
-        if(current_salary>max_salary) {
-          return(0) # Penalty for exceeding the max salary
-        }
-        else if (all(positions_count == positions_required)) {
-          return(current_goals_added) # meets the players and positions constraint
-        }
-        else {
-          return(0)
-        }
-      }
-      
-      # Genetic algorithm function
-      GA = ga(
-        type = "binary",
-        fitness = fitness,
-        nBits = nrow(Filtered_Player_Data),
-        population = initializePopulation(sel_pop),
-        crossover = crossoverFunction,
-        mutation = mutationFunction,
-        run = 125,
-        pmutation = .25,
-        maxiter = 300,
-        popSize = 30,
-        monitor = FALSE
-      )
-      
-      # displaying the algorithm's results on the UI
-      output$table = renderDataTable(Filtered_Player_Data[GA@solution == 1,] %>%
-                                       select(c('Player',
-                                                'Position',
-                                                'Log_Goals_Added',
-                                                'Guaranteed_Compensation')),
-                                     options = list(
-                                       searching = FALSE,
-                                       lengthChange = FALSE,
-                                       dom = "lfrt"
-                                     ))
     })
   }
 )
