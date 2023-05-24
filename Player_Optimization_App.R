@@ -14,11 +14,13 @@ if (!require(shiny)){
   library(shiny)
 }
 
+# show_modal_spinner and report_warning
 if (!require(shinybusy)){
   install.packages('shinybusy')
 }
 library(shinybusy)
 
+# currencyInput
 if (!require(shinyWidgets)){
   install.packages('shinyWidgets')
 }
@@ -59,126 +61,89 @@ if (!require(tidyverse)){
 }
 library(tidyverse)
 
+# ASA's package to connect to their API
+if (!require(itscalledsoccer)){
+  install.packages('itscalledsoccer')
+}
+library(itscalledsoccer)
+
 ### Import and Clean Data ###
 
-# Steps to pull files from repo
-owner = "cfw412"
-repo = "player_optimization"
-path = "Data"
+# American Soccer Analysis API client
+asa_client <- AmericanSoccerAnalysis$new()
 
-# Construct the URL for the API endpoint with the main branch
-url = paste0("https://api.github.com/repos/", owner, "/", repo, "/contents/", path, "?ref=main")
+goals_added = asa_client$get_player_goals_added(leagues = "mls", 
+                                                    season_name = "2022") %>% 
+  tidyr::unnest("data") %>%
+  tidyr::unnest("team_id") %>%
+  select(-c(team_id)) %>%
+  distinct()
 
-# Make a GET request to the API endpoint and convert the response to a data frame
-response = GET(url)
-data = content(response, "text")
-df = fromJSON(data)
+# aggregating rows by goals_added per player
+goals_added = goals_added %>% 
+  group_by(player_id, general_position) %>% 
+  summarise(across(c(goals_added_raw, goals_added_above_avg),sum), 
+            .groups = 'drop') %>% 
+  as.data.frame()
 
-# Load the American Soccer Analysis goals added and salary data
-ga_salary_data = data.frame()
-ga_salary_data_url = df %>%
-  filter(name == "2022_MLS_GoalsAdded_and_Salary_Data.xlsx") %>%
-  select('download_url') %>%
-  pull()
+salaries = asa_client$get_player_salaries(leagues = "mls", season_name = "2022")
 
-temp_file = tempfile()
-download.file(ga_salary_data_url, temp_file, mode = "wb")
-Player_Goals_Added = read_excel(temp_file, sheet = "Player_Goals_Added")
-Player_Salary = read_excel(temp_file, sheet = "Player_Salary") %>%
-  select(-c("Season"))
+teams = asa_client$get_teams(leagues = "mls") 
 
-# Data cleansing and wrangling for MLSPA salary data
-MLSPA_Player_Salary_202209 =
-  read_csv("http://s3.amazonaws.com/mlspa/9_2_2022-Roster-Freeze-Salary-List.csv?mtime=20221017131703") %>%
-  select(-c("Nickname")) %>%
-  mutate(`2022 Base Salary` = floor(as.numeric(gsub("[$,]", "", `2022 Base Salary`)))) %>%
-  mutate(`2022 Guar. Comp.` = floor(as.numeric(gsub("[$,]", "", `2022 Guar. Comp.`)))) %>%
-  mutate(Source = 9)
+players = asa_client$get_players(leagues = "mls")
 
-MLSPA_Player_Salary202204 = 
-  read_csv("http://s3.amazonaws.com/mlspa/2022_salary_list_4.15__for_site.csv?mtime=20220517164257") %>%
-  mutate(`2022 Base Salary` = floor(as.numeric(gsub("[$,]", "", `2022 Base Salary`)))) %>%
-  mutate(`2022 Guar. Comp.` = floor(as.numeric(gsub("[$,]", "", `2022 Guar. Comp.`)))) %>%
-  mutate(Source = 4)
+player_salaries = merge(x = salaries, y = players, by = "player_id")
 
-MLSPA_Player_Salary202204 = rename(MLSPA_Player_Salary202204, "Position" = "Playing Position")
+# TODO: dynamically select the max date and filter on that instead
+player_salaries = merge(x = player_salaries, y = teams, by = "team_id") %>%
+  filter(mlspa_release == "2022-09-02") %>% 
+  select(c(player_id, 
+           player_name, 
+           team_abbreviation, 
+           base_salary, 
+           guaranteed_compensation, 
+           mlspa_release))
 
-MLSPA_Player_Salary =
-  union(MLSPA_Player_Salary_202209, MLSPA_Player_Salary202204)
+player_data = merge(x = goals_added, y = player_salaries, by = "player_id") %>%
+  arrange(desc(goals_added_raw)) %>%
+  rename("position" = "general_position")
 
-MLSPA_Player_Salary = MLSPA_Player_Salary %>%
-  mutate(Player = paste(MLSPA_Player_Salary$'First Name', MLSPA_Player_Salary$'Last Name', sep = " "))
-
-MLSPA_Player_Salary = MLSPA_Player_Salary %>%
-  relocate(c("Player", "Club", "Position", "2022 Base Salary", "2022 Guar. Comp."))
-
-MLSPA_Player_Salary = rename(MLSPA_Player_Salary,
-                             "Team" = "Club",
-                             "Base Salary" = "2022 Base Salary",
-                             "Guaranteed Compensation" = "2022 Guar. Comp.") %>%
-  select(-c("Last Name", "First Name", Team, Position))
-
-MLSPA_Player_Salary = MLSPA_Player_Salary %>%
-  arrange(desc(Player)) %>%
-  group_by(Player) %>%
-  mutate(Rank = row_number(desc(Source))) %>%
-  filter(Rank == 1)
-
-Salary_Data =
-  full_join(Player_Salary, MLSPA_Player_Salary %>% select(-c(Source, Rank)), by = 'Player')
-
-Player_Data = Player_Goals_Added %>% 
-  left_join(Salary_Data, by = "Player")
-
-# Renaming fields
-Player_Data = Player_Data %>% 
-  mutate('Guaranteed Compensation.x' 
-         = coalesce(Player_Data$'Guaranteed Compensation.x',Player_Data$'Guaranteed Compensation.y')) %>%
-  mutate('Base Salary.x' 
-         = coalesce(Player_Data$'Base Salary.x',Player_Data$'Base Salary.y')) %>%
-  mutate('Position.x' 
-         = coalesce(Player_Data$'Position.x',Player_Data$'Position.y')) %>%
-  mutate('Team.x' 
-         = coalesce(Player_Data$'Team.x',Player_Data$'Team.y')) %>%
-  select(-c("Team.y",
-            "Position.y",
-            "Base Salary.y", 
-            "Guaranteed Compensation.y")) %>% 
-  rename("Position" = "Position.x",
-         "Team" = "Team.x",
-         "Base_Salary" = "Base Salary.x",
-         "Guaranteed_Compensation" = "Guaranteed Compensation.x",
-         "Goals_Added" = "Goals Added") %>% 
-  drop_na(Base_Salary)
-
-# Removing rows where there is no salary
-Player_Data %>%
-  filter(is.na(Base_Salary))
+rm(player_salaries)
+rm(players)
+rm(teams)
+rm(salaries)
 
 # Getting the log of the Goals Added metric so that it is on a 0 to 1 scale
-Player_Data = data.frame(Player_Data %>% 
-                           mutate(Log_Goals_Added = 
-                                    log10(Goals_Added+(abs(min(Player_Data$Goals_Added))+1.01)))) %>%
-  mutate(across('Log_Goals_Added', round, 4))
+shifted_values <- player_data$goals_added_raw - min(player_data$goals_added_raw)
+transformed_values <- log1p(shifted_values)
+normalized_values <- (transformed_values - min(transformed_values)) / (max(transformed_values) - min(transformed_values))
+normalized_values <- normalized_values * (0.9999 - 0.0001) + 0.0001
+
+player_data = data.frame(player_data %>% 
+                           mutate(log_goals_added = normalized_values)) %>% 
+  mutate(across('log_goals_added', round, 4))
 
 ### Shiny App ###
+
+unique(player_data$position)
 
 shinyApp(
   
   # UI function
   ui = fluidPage(
-    
     # changing the color of the background
-    tags$head(tags$style(
-      HTML('
-         #sidebarPanel {
-            background-color: #582C8350;
-         }
-        
-         #title {
-          color: #380F55;
-         }')
-    )),
+    tags$head(
+      tags$style(
+        HTML('
+           #sidebarPanel {
+              background-color: #582C8350;
+           }
+          
+           #title {
+            color: #380F55;
+           }')
+        )
+      ),
     
     # Title
     titlePanel("", windowTitle = "Player Optimization App"),
@@ -196,12 +161,12 @@ shinyApp(
                    currencyInput(inputId = "max_salary", 
                                  label = "What is the salary limit?", 
                                  format = "dollar", 
-                                 value = 1000000, 
-                                 # max = 
+                                 value = 1000000,
                                  align = "center"), 
                    
                    actionButton(inputId = "btn_run", 
                                 label = "Run"), 
+                   
                    width = 6
       ), 
       
@@ -221,7 +186,7 @@ shinyApp(
     max_salary = reactive({input$max_salary})
     
     # unique list of positions from the dataset
-    position_list = c(unique(Player_Data$Position))
+    position_list = c(unique(player_data$position))
     
     # dynamically create and render numericInputs for the player position inputs
     output$position_inputs = renderUI({
@@ -300,13 +265,13 @@ shinyApp(
         max_salary = max_salary()
         
         # filter the Player_Data dataframe on the players in the selected positions
-        Filtered_Player_Data = 
-          Player_Data %>%
-          filter(Position %in% position_values$position) %>%
-          select(c('Player',
-                   'Position',
-                   'Guaranteed_Compensation',
-                   'Log_Goals_Added'))
+        filtered_player_data = 
+          player_data %>%
+          filter(position %in% position_values$position) %>%
+          select(c('player_name',
+                   'position',
+                   'guaranteed_compensation',
+                   'log_goals_added'))
         
         ### GA Functions
         ### Initialize population
@@ -320,7 +285,7 @@ shinyApp(
             
             for (i in 1:length(position_values$input_value)) {
               if (position_values$input_value[i] > 0) {
-                ind = which(Filtered_Player_Data$Position 
+                ind = which(player_data$position 
                             == names(position_values$input_value)[i])
                 mat[, ind[sample(length(ind), 1)]] = 1
               }
@@ -380,9 +345,9 @@ shinyApp(
         # constraint of number of players and their positions
         fitness = function(x)
         {
-          current_goals_added=x%*%Filtered_Player_Data$Log_Goals_Added
-          current_salary=x%*%Filtered_Player_Data$Guaranteed_Compensation
-          positions = Filtered_Player_Data$Position[x == 1] # positions of selected players
+          current_goals_added=x%*%filtered_player_data$log_goals_added
+          current_salary=x%*%filtered_player_data$guaranteed_compensation
+          positions = filtered_player_data$position[x == 1] # positions of selected players
           positions_count = table(positions) # count of players in each position
           
           if(current_salary>max_salary) {
@@ -400,7 +365,7 @@ shinyApp(
         GA = ga(
           type = "binary",
           fitness = fitness,
-          nBits = nrow(Filtered_Player_Data),
+          nBits = nrow(filtered_player_data),
           population = initializePopulation(sel_pop),
           crossover = crossoverFunction,
           mutation = mutationFunction,
@@ -412,16 +377,16 @@ shinyApp(
         )
         
         #
-        Renamed_Player_Data = Filtered_Player_Data %>%
-          select(c('Player',
-                   'Position',
-                   'Log_Goals_Added',
-                   'Guaranteed_Compensation')) %>%
-          rename('Goals Added' = 'Log_Goals_Added',
-                 'Total Salary' = 'Guaranteed_Compensation')
+        renamed_player_data = filtered_player_data %>%
+          select(c('player_name',
+                   'position',
+                   'log_goals_added',
+                   'guaranteed_compensation')) %>%
+          rename('Goals Added' = 'log_goals_added',
+                 'Total Salary' = 'guaranteed_compensation')
   
         # displaying the algorithm's results on the UI
-        output$table = renderDataTable(Renamed_Player_Data[GA@solution == 1,],
+        output$table = renderDataTable(renamed_player_data[GA@solution == 1,],
                                        options = list(
                                          searching = FALSE,
                                          lengthChange = FALSE,

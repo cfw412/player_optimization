@@ -1,0 +1,14 @@
+name: player_optimization
+title: player_optimization
+username:
+account: cfw412
+server: shinyapps.io
+hostUrl: https://api.shinyapps.io/v1
+appId: 9174118
+bundleId: 7255353
+url: https://cfw412.shinyapps.io/player_optimization/
+when: 1684894416.9548
+lastSyncTime: 1684894416.95481
+asMultiple: FALSE
+asStatic: FALSE
+ignoredFiles: .gitattributes|api_connection_sandbox.Rmd|README.md
