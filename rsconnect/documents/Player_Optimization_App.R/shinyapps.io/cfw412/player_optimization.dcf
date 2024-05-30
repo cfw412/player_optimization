@@ -5,10 +5,10 @@ account: cfw412
 server: shinyapps.io
 hostUrl: https://api.shinyapps.io/v1
 appId: 9174118
-bundleId: 7255353
+bundleId: 8562225
 url: https://cfw412.shinyapps.io/player_optimization/
-when: 1684894416.9548
-lastSyncTime: 1684894416.95481
+when: 1714531979.2206
+lastSyncTime: 1714531979.22061
 asMultiple: FALSE
 asStatic: FALSE
-ignoredFiles: .gitattributes|api_connection_sandbox.Rmd|README.md
+ignoredFiles: .gitattributes|api_connection_sandbox.Rmd|README.md|results_sorted_by_fitness.R|results_sorted_by_fitness.Rmd|Screen Shot 2024-03-05 at 9.26.46 PM.png
